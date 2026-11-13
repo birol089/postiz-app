@@ -824,6 +824,44 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
     }
   }
 
+  // Video upload body. With a custom thumbnail on the media (image[].thumbnail,
+  // same field Instagram and YouTube use) the request goes as multipart so the
+  // image can ride along as `thumb`; without one, or if the image cannot be
+  // read, it stays the plain JSON request.
+  private async videoUploadOptions(
+    firstPost: PostDetails<FacebookDto>
+  ): Promise<RequestInit> {
+    const fields: Record<string, string> = {
+      file_url: firstPost?.media?.[0]?.path!,
+      description: firstPost.message,
+      ...(firstPost?.settings?.title ? { title: firstPost.settings.title } : {}),
+      published: 'true',
+    };
+    const thumbnail = firstPost?.media?.[0]?.thumbnail;
+    if (thumbnail) {
+      try {
+        const image = await this.readOrFetch(thumbnail);
+        const form = new FormData();
+        Object.entries(fields).forEach(([k, v]) => form.append(k, v));
+        form.append(
+          'thumb',
+          new Blob([new Uint8Array(image)], {
+            type: hasExtension(thumbnail, 'png') ? 'image/png' : 'image/jpeg',
+          }),
+          hasExtension(thumbnail, 'png') ? 'thumb.png' : 'thumb.jpg'
+        );
+        return { method: 'POST', body: form };
+      } catch (err) {
+        // A missing thumbnail must not cost the post: fall back to no thumbnail.
+      }
+    }
+    return {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...fields, published: true }),
+    };
+  }
+
   private async postNonStory(
     id: string,
     accessToken: string,
@@ -841,20 +879,7 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
       } = await (
         await this.fetch(
           `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${id}/videos?access_token=${accessToken}&fields=id,permalink_url`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              file_url: firstPost?.media?.[0]?.path!,
-              description: firstPost.message,
-              ...(firstPost?.settings?.title
-                ? { title: firstPost.settings.title }
-                : {}),
-              published: true,
-            }),
-          },
+          await this.videoUploadOptions(firstPost),
           'upload mp4'
         )
       ).json();
